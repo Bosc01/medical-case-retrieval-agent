@@ -417,6 +417,59 @@ def paired_bootstrap_p(
     return (extreme + 1) / (int(n_resamples) + 1)
 
 
+
+def benjamini_hochberg(
+    p_values: Mapping[str, float], alpha: float = 0.05
+) -> dict[str, Any]:
+    """Control the false discovery rate across a family of tests.
+
+    Bonferroni controls the chance of ANY false positive and is brutal when the
+    metrics are correlated, which P@5, P@10 and nDCG@5 obviously are. BH instead
+    controls the expected PROPORTION of discoveries that are false, which is the
+    right question when reporting a table of related metrics.
+
+    Sort the p-values ascending, find the largest rank i where p_i <= (i/m)*alpha,
+    and reject everything up to it. Returns adjusted q-values (the step-up
+    monotone version) alongside the reject flags.
+    """
+    items = sorted(p_values.items(), key=lambda kv: kv[1])
+    m = len(items)
+    if m == 0:
+        return {"alpha": alpha, "n_tests": 0, "results": {}, "n_significant": 0}
+
+    # Step-up: enforce monotonicity from the largest p downwards so a q-value
+    # can never exceed one computed at a higher rank.
+    q_raw = [(name, p, min(1.0, p * m / (i + 1))) for i, (name, p) in enumerate(items)]
+    q_adj: list[tuple[str, float, float]] = []
+    running = 1.0
+    for name, p, q in reversed(q_raw):
+        running = min(running, q)
+        q_adj.append((name, p, running))
+    q_adj.reverse()
+
+    crit = 0
+    for i, (_, p) in enumerate(items, start=1):
+        if p <= (i / m) * alpha:
+            crit = i
+
+    results = {
+        name: {
+            "p": p,
+            "q": q,
+            "rank": i + 1,
+            "reject": (i + 1) <= crit,
+        }
+        for i, (name, p, q) in enumerate(q_adj)
+    }
+    return {
+        "alpha": alpha,
+        "n_tests": m,
+        "critical_rank": crit,
+        "results": results,
+        "n_significant": crit,
+    }
+
+
 def compare(
     baseline: EvalResult,
     reranked: EvalResult,

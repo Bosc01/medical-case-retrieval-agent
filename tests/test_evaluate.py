@@ -496,3 +496,45 @@ def test_eval_result_summary_mentions_skipped_queries():
     )
     assert "2 queries scored" in res.summary()
     assert "1 skipped" in res.summary()
+
+
+# --- Benjamini-Hochberg -------------------------------------------------
+
+from medcase.evaluate import benjamini_hochberg
+
+
+def test_bh_matches_hand_computed_thresholds():
+    # m=4, alpha=0.05 -> thresholds i/m*alpha = .0125 .025 .0375 .05
+    # p = .001 <= .0125 ok; .013 <= .025 ok; .20 > .0375; .60 > .05
+    # Largest passing rank is 2, so ranks 1 and 2 are rejected.
+    r = benjamini_hochberg({"a": 0.001, "b": 0.013, "c": 0.20, "d": 0.60}, alpha=0.05)
+    assert r["critical_rank"] == 2
+    assert r["results"]["a"]["reject"] and r["results"]["b"]["reject"]
+    assert not r["results"]["c"]["reject"] and not r["results"]["d"]["reject"]
+    # q = p * m / rank, so b -> .013 * 4 / 2 = .026
+    assert abs(r["results"]["b"]["q"] - 0.026) < 1e-9
+
+
+def test_bh_q_values_are_monotone_in_rank():
+    r = benjamini_hochberg({"a": 0.01, "b": 0.02, "c": 0.03, "d": 0.9})
+    qs = [v["q"] for v in sorted(r["results"].values(), key=lambda v: v["rank"])]
+    assert qs == sorted(qs), "step-up adjustment must never decrease with rank"
+
+
+def test_bh_rejects_nothing_when_all_p_are_large():
+    r = benjamini_hochberg({"a": 0.6, "b": 0.7, "c": 0.8})
+    assert r["n_significant"] == 0
+    assert not any(v["reject"] for v in r["results"].values())
+
+
+def test_bh_is_less_conservative_than_bonferroni():
+    # p=0.02 with m=4: Bonferroni needs <=0.0125 and fails; BH rank 2 allows .025.
+    p = {"a": 0.001, "b": 0.02, "c": 0.5, "d": 0.9}
+    r = benjamini_hochberg(p, alpha=0.05)
+    assert r["results"]["b"]["reject"]
+    assert p["b"] > 0.05 / len(p)
+
+
+def test_bh_empty_input():
+    r = benjamini_hochberg({})
+    assert r["n_tests"] == 0 and r["results"] == {}

@@ -1,9 +1,9 @@
 {
   "n_candidates": 50,
   "batch_size": 32,
-  "unsorted_ms": 1854.964958038181,
-  "sorted_ms": 1623.6274159746245,
+  "unsorted_ms": 3179.655250045471,
+  "sorted_ms": 3109.936250024475,
   "unsorted_padding_waste": 0.3137,
   "sorted_padding_waste": 0.2338,
-  "speedup": 1.1424819141309523
+  "speedup": 1.0224181444299532
 }

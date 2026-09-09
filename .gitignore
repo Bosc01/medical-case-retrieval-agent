@@ -8,3 +8,6 @@ data/index/
 
 # Machine-specific trust store, never portable.
 data/ca-roots.pem
+
+# Regenerable score dump, large.
+data/scores_depth100.json

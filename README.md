@@ -35,24 +35,31 @@ system, because reranking cannot surface a case that FAISS never returned.
 
 ## Findings
 
-Four results, including the two that went against the change:
+Six results, including the three that went against the change:
 
 1. Reranking improves the top five under a broad relevance definition. P@5 rises
-   9.2%, from 0.5417 to 0.5917, at p=0.0044 on 120 queries.
-2. That gain does not survive a stricter relevance definition. Under rare-
-   descriptor, major-topic-in-both labels, P@5 goes from 0.2316 to 0.2211 with
-   p=0.61. No detectable effect.
+   9.2%, from 0.5417 to 0.5917, and survives Benjamini-Hochberg correction
+   across 14 metrics at q=0.0257.
+2. The gain is bounded by how common the diagnosis is. Sweeping the relevance
+   definition by descriptor rarity, the effect is negative below a document
+   frequency of about 20 and grows monotonically above it. The reranker helps on
+   common presentations and does not help on rare ones.
 3. A general-domain reranker gains nothing on the same setup, moving P@5 by
-   exactly 0.0000. The biomedical model is doing the work, not reranking as a
-   technique.
-4. Retrieving deeper does not help, despite recall@50 of 0.5432 against a 0.9709
-   ceiling suggesting it should. Depth 200 costs 4.8 times the latency and makes
-   P@10 significantly worse.
+   exactly 0.0000 and surviving 0 of 14 corrected tests. The biomedical model is
+   doing the work, not reranking as a technique.
+4. Retrieving deeper does not help on any relevance definition, despite
+   recall@50 of 0.5432 against a 0.9709 ceiling suggesting it should. Depth 100
+   leaves P@5 unchanged and makes P@10 significantly worse on all three
+   definitions.
+5. Reranking cost is a step function of batch count, not linear in candidates.
+   The top-30 budget is the largest that still fits one batch, and it matches
+   full-depth P@5 exactly.
+6. fp16 weights plus that budget run 4.70 times faster than the reference for a
+   P@5 delta of exactly 0.0000, at the cost of 2.6% MAP.
 
-Reranking costs 2272 ms per query against 17.1 ms for the retrieval it corrects.
-Every number here is reproducible from the scripts in this repository, and the
-JSON each one wrote is committed alongside it.
-
+Reranking costs 290 ms per query on the fast path, against 17.1 ms for the
+retrieval it corrects. Every number here is reproducible from the scripts in
+this repository, and the JSON each one wrote is committed alongside it.
 
 ## Models
 
@@ -249,6 +256,120 @@ An earlier version of these numbers was measured while other processes were
 competing for the GPU, and reported 4761 ms/query and 33.6 ms/query for the two
 stages. Those figures were wrong. The table above is from an uncontended run.
 
+### After multiple-comparison correction
+
+Fourteen correlated metrics tested at 0.05 will turn up something on noise alone
+about half the time, so the p-values above need correcting. `judged@k` is
+excluded from the family because every retrieved document here is judged, making
+it numerically identical to `P@k`; counting both would pad the family with an
+exact duplicate.
+
+Benjamini-Hochberg controls the expected proportion of reported findings that
+are false, which is the right control for a table of metrics that move together.
+Bonferroni controls the chance of any false positive at all and is shown for
+reference.
+
+| metric | delta | p | BH q | survives BH | survives Bonferroni |
+|---|---|---|---|---|---|
+| P@10 | +0.0567 | 0.0001 | 0.0014 | yes | yes |
+| P@5 | +0.0500 | 0.0044 | 0.0257 | yes | no |
+| nDCG@10 | +0.0447 | 0.0055 | 0.0257 | yes | no |
+| MAP | +0.0215 | 0.0188 | 0.0658 | no | no |
+| nDCG@5 | +0.0364 | 0.0595 | 0.1388 | no | no |
+
+Three of fourteen survive, and the headline P@5 result is one of them at
+q=0.0257. It does not survive Bonferroni, which is the stricter and less
+appropriate test here. The ms-marco control survives nothing: zero of fourteen,
+with its best q-value at 0.6780.
+
+So the claim holds. Reranking improves P@5 by 9.2% under this relevance
+definition, at a false discovery rate of 0.05 across the whole metric table.
+
+### Which queries it helps
+
+Reporting a gain on one relevance definition and no gain on another does not
+say anything actionable. Sweeping the definition between them does.
+
+The knob is document frequency: how many cases in the corpus carry the shared
+descriptor. Low df is a rare, specific diagnosis. High df is a common one.
+Relevance requires the descriptor to be a major topic of both cases throughout,
+so only the rarity threshold changes.
+
+| max df | queries | relevant/query | baseline | reranked | delta | p |
+|---|---|---|---|---|---|---|
+| 10 | 63 | 6.2 | 0.2222 | 0.2000 | -0.0222 | 0.2749 |
+| 15 | 76 | 9.3 | 0.2316 | 0.2211 | -0.0105 | 0.6051 |
+| 20 | 82 | 11.5 | 0.2634 | 0.2732 | +0.0098 | 0.6518 |
+| 25 | 90 | 14.7 | 0.3244 | 0.3356 | +0.0111 | 0.6019 |
+| 30 | 94 | 16.3 | 0.3617 | 0.3745 | +0.0128 | 0.5393 |
+| 45 | 120 | 27.1 | 0.5150 | 0.5633 | +0.0483 | 0.0068 |
+
+The boundary sits near df 20. Below it the reranker is neutral to slightly
+negative; above it the gain grows with the commonness of the shared concept.
+Only the loosest definition reaches significance after correction (q=0.0408),
+and it is the only one that does.
+
+The delta increases monotonically across all six thresholds. That is suggestive
+rather than a formal result, because the definitions are nested and therefore
+share most of their queries, so adjacent rows are not independent tests.
+
+The mechanism this points to is worth stating. MedCPT was trained on PubMed
+search logs, which are dominated by common clinical queries. The pattern here is
+consistent with the reranker being strong inside that distribution and no better
+than the bi-encoder outside it. For a rare-disease case-matching tool, which is
+arguably the most valuable version of this product, the reranker as configured
+does not help.
+
+### Reranking fewer candidates
+
+Cost is per batch, not per candidate. Every sequence in a batch is padded to the
+longest one and the batch goes through the model together, so at batch size 32
+a budget of 12 and a budget of 30 cost exactly one forward pass. Only a budget
+that removes a batch saves anything.
+
+| budget | batches | P@5 | vs full | p | latency | saving |
+|---|---|---|---|---|---|---|
+| top-10 | 1 | 0.5750 | -0.0167 | 0.2854 | 1136 ms | 2.0x |
+| top-20 | 1 | 0.5900 | -0.0017 | 0.9406 | 1136 ms | 2.0x |
+| top-30 | 1 | 0.5917 | +0.0000 | 1.0000 | 1136 ms | 2.0x |
+| top-50 | 2 | 0.5917 | - | - | 2272 ms | 1.0x |
+
+Reranking the top 30 rather than all 50 halves the cost for a P@5 delta of
+exactly 0.0000. Cutting further saves nothing at this batch size and starts
+costing quality, so 30 is the right budget: it is the largest one that still
+fits in a single batch.
+
+An earlier version of this analysis modelled latency as linear in candidates and
+reported a 2.5x saving at top-20. That was wrong. Padding makes cost a step
+function of batch count, and the corrected model is in the table above.
+
+
+### The fast path
+
+Two changes compose. Reranking the top 30 rather than all 50 fits the work into
+one batch, and fp16 weights halve the memory traffic per pass. Measured over all
+120 queries, end to end:
+
+| configuration | latency | P@5 | P@10 | nDCG@5 | MAP |
+|---|---|---|---|---|---|
+| fp32, top-50 | 1361 ms | 0.5917 | 0.5442 | 0.5975 | 0.3623 |
+| fp16, top-30 | 290 ms | 0.5917 | 0.5475 | 0.5997 | 0.3530 |
+
+4.70 times faster. P@5 is unchanged to four decimal places, a delta of exactly
+0.0000 at p=1.0000, and P@10 and nDCG@5 both drift very slightly upward.
+
+MAP drops 2.6%, and that one is significant at p=0.0081. It is the deliberate
+cost of the budget: documents at ranks 31 to 50 keep their embedding order
+rather than being rescored, and MAP is sensitive to the whole ranking while the
+pipeline only shows five. If a use case needs the full ranking ordered well,
+raise the budget to 50 and keep fp16, which is still roughly 2.4 times faster
+than the reference.
+
+fp16 changes individual scores by up to 0.023, which is enough to permute
+documents deep in the ranking but never reordered the top five in testing. The
+verification is the table above rather than that observation.
+
+
 ### Where the headroom actually is
 
 `scripts/recall_sweep.py` measures recall at increasing retrieval depth:
@@ -281,6 +402,29 @@ Going deeper does not improve the top five. Depth 100 moves P@5 by +0.0050
 (p=0.80, 9 wins against 7 losses and 104 ties) and depth 200 moves it by -0.0050
 (p=0.68). Depth 200 makes P@10 significantly worse, -5.1% at p=0.0057, while
 costing 4.8 times the latency.
+
+The obvious objection is that this was measured on the loose relevance
+definition, where recall is plentiful and extra candidates cannot help much.
+Deeper retrieval ought to pay off precisely where relevant cases are scarce. So
+`scripts/depth100_eval.py` re-runs depth 50 against depth 100 on all three
+definitions, replaying one score dump so the arms are identical:
+
+| definition | P@5 at depth 50 | P@5 at depth 100 | delta | p | P@10 delta | p |
+|---|---|---|---|---|---|---|
+| strict (df<=15) | 0.2211 | 0.2211 | +0.0000 | 1.0000 | -0.0197 | 0.0077 |
+| middle (df<=25) | 0.3356 | 0.3400 | +0.0044 | 0.6285 | -0.0189 | 0.0039 |
+| broad (df<=45) | 0.5633 | 0.5717 | +0.0083 | 0.3192 | -0.0150 | 0.0285 |
+
+It does not pay off anywhere. P@5 is flat on every definition, and under the
+strict one it is identical to four decimal places: the extra fifty candidates
+contributed nothing at all to the top five. P@10 is significantly worse on all
+three, which is the clearer signal. Candidates from ranks 51 to 100 are
+occasionally scored highly by the cross-encoder and displace better cases,
+because its scores are not calibrated well enough across a deeper pool for the
+extra reach to be free.
+
+MAP does improve with depth on the broad definition, +0.0380 at p=0.0001, and
+that is the one real benefit. It is not the metric this pipeline consumes.
 
 MAP does improve with depth, +10.5% at depth 200 with p=0.0011, but MAP rewards
 finding more relevant documents anywhere in the ranking. This pipeline shows
