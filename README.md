@@ -1,5 +1,7 @@
 # Medical Case Retrieval Agent
 
+[![CI](https://github.com/Bosc01/medical-case-retrieval-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Bosc01/medical-case-retrieval-agent/actions/workflows/ci.yml)
+
 Retrieval over PubMed case reports with a cross-encoder reranker between the
 vector search and the language model.
 
