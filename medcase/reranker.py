@@ -137,6 +137,7 @@ class CrossEncoderReranker:
         normalize: bool = False,
         torch_dtype: torch.dtype | None = None,
         sort_by_length: bool = True,
+        min_score_spread: float = 2.0,
     ) -> None:
         self.model_name = model_name
         self.device = _resolve_device(device)
@@ -145,9 +146,17 @@ class CrossEncoderReranker:
         self.normalize = normalize
         self.torch_dtype = torch_dtype
         self.sort_by_length = sort_by_length
+        # When the model cannot tell the candidates apart its ordering is noise,
+        # and acting on it demotes documents the bi-encoder had ranked well. On
+        # this corpus the median spread over 50 candidates is about 16 and the
+        # observed failure case was 0.66, so 2.0 separates them with room to
+        # spare. Set to 0 to always trust the reranker.
+        self.min_score_spread = min_score_spread
         self._tokenizer = None
         self._model = None
         self._cache: dict[str, float] = {}
+        self.last_spread: float = 0.0
+        self.last_fell_back: bool = False
         self._cache_size = cache_size
         self.last_metrics = RerankMetrics()
 
@@ -304,7 +313,20 @@ class CrossEncoderReranker:
             )
             for i, (doc, text, score) in enumerate(zip(documents, texts, scores))
         ]
-        scored.sort(key=lambda s: s.rerank_score, reverse=True)
+        spread = max(scores) - min(scores) if len(scores) > 1 else 0.0
+        self.last_spread = spread
+        self.last_fell_back = bool(
+            self.min_score_spread and len(scores) > 1 and spread < self.min_score_spread
+        )
+        if self.last_fell_back:
+            logger.warning(
+                "score spread %.2f below %.2f; keeping retrieval order for %r",
+                spread,
+                self.min_score_spread,
+                query[:60],
+            )
+        else:
+            scored.sort(key=lambda s: s.rerank_score, reverse=True)
         for new_rank, item in enumerate(scored):
             item.rerank_rank = new_rank
         return scored[:top_k] if top_k else scored

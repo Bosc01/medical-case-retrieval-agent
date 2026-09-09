@@ -58,6 +58,11 @@ Six results, including the three that went against the change:
    full-depth P@5 exactly.
 6. fp16 weights plus that budget run 4.70 times faster than the reference for a
    P@5 delta of exactly 0.0000, at the cost of 2.6% MAP.
+7. Query style matters. Keyword-style queries gain 12.4% P@5 against 9.2% for
+   narrative case presentations, and the cross-encoder can collapse to a score
+   spread near zero on some narrative queries, where it degrades a correct
+   ranking. The reranker now falls back to embedding order when that happens,
+   which changes none of the measured results.
 
 Reranking costs 290 ms per query on the fast path, against 17.1 ms for the
 retrieval it corrects. Every number here is reproducible from the scripts in
@@ -349,6 +354,41 @@ fits in a single batch.
 An earlier version of this analysis modelled latency as linear in candidates and
 reported a 2.5x saving at top-20. That was wrong. Padding makes cost a step
 function of batch count, and the corrected model is in the table above.
+
+
+### Query style, and a failure case
+
+MedCPT was trained on PubMed search logs, which are short keyword queries. The
+eval here uses narrative case presentations, which are not that. Running both
+styles over the same cases, candidates and labels, with titles standing in for
+keyword-style queries:
+
+| style | P@5 | delta | p | nDCG@5 | p |
+|---|---|---|---|---|---|
+| narrative presentation | 0.5417 to 0.5917 | +9.2% | 0.0044 | +6.5% | 0.0604 |
+| keyword title | 0.5633 to 0.6333 | +12.4% | 0.0004 | +13.8% | 0.0003 |
+
+Keyword-style queries get more out of the reranker. The P@5 gain is larger, and
+nDCG@5 moves from not significant to clearly significant. Query formulation is
+therefore a real lever here, and the headline number was measured on the harder
+of the two styles.
+
+There is a failure mode underneath this that is worth knowing about. For a
+textbook endocarditis vignette, "Middle-aged man with fever, new murmur and
+splinter haemorrhages after a dental procedure", the cross-encoder scored all 30
+candidates between -15.35 and -16.01, a spread of 0.66. With no discrimination
+to offer it reordered essentially at random, and it demoted the endocarditis
+cases that FAISS had correctly ranked 1, 4, 6, 7 and 9. The same target under
+the keyword query "infective endocarditis" separated relevant from irrelevant by
+22.5.
+
+That query is not representative. The median spread across all 120 narrative
+queries is 16.07, so the reranker usually does discriminate, and an early
+reading that it was operating near its noise floor throughout was wrong. But the
+failure is real, it is silent, and it is the kind that degrades a correct
+ranking rather than merely failing to improve it. A production system should
+detect a collapsed score spread and fall back to embedding order rather than
+trusting the reordering.
 
 
 ### The fast path

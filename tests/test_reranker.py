@@ -149,3 +149,36 @@ def test_clear_cache_empties_it():
 
 def test_model_is_not_loaded_until_used():
     assert CrossEncoderReranker().is_loaded is False
+
+
+# --- collapsed-score fallback -------------------------------------------
+
+def test_falls_back_to_retrieval_order_when_scores_collapse(monkeypatch):
+    """A model that cannot separate candidates must not reorder them.
+
+    Observed on a real query where all 30 candidates scored within 0.66: the
+    reranker demoted correctly-retrieved cases on noise.
+    """
+    rr = CrossEncoderReranker(min_score_spread=2.0)
+    monkeypatch.setattr(rr, "score", lambda q, texts: [-15.5, -15.6, -15.4])
+    docs = ["a", "b", "c"]
+    out = rr.rerank("q", docs, text_of=lambda d: d)
+    assert [o.document for o in out] == ["a", "b", "c"], "order must be untouched"
+    assert rr.last_fell_back is True
+    assert rr.last_spread < 2.0
+
+
+def test_reorders_normally_when_spread_is_wide(monkeypatch):
+    rr = CrossEncoderReranker(min_score_spread=2.0)
+    monkeypatch.setattr(rr, "score", lambda q, texts: [-10.0, 5.0, -2.0])
+    out = rr.rerank("q", ["a", "b", "c"], text_of=lambda d: d)
+    assert [o.document for o in out] == ["b", "c", "a"]
+    assert rr.last_fell_back is False
+
+
+def test_guard_can_be_disabled(monkeypatch):
+    rr = CrossEncoderReranker(min_score_spread=0.0)
+    monkeypatch.setattr(rr, "score", lambda q, texts: [-15.5, -15.6, -15.4])
+    out = rr.rerank("q", ["a", "b", "c"], text_of=lambda d: d)
+    assert [o.document for o in out] == ["c", "a", "b"], "disabled guard must sort"
+    assert rr.last_fell_back is False
