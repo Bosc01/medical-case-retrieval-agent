@@ -101,6 +101,11 @@ python3.12 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 ```
 
+`requirements.txt` carries lower bounds so the package installs on 3.11 and
+3.12. To reproduce the measured numbers exactly, install
+`requirements-lock.txt` instead, which pins the versions every figure in this
+README was produced under.
+
 Two environment notes, both specific to this machine rather than to the code:
 
 TLS interception. Python verifies against certifi, which does not know a

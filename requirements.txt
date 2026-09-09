@@ -1,5 +1,11 @@
-faiss-cpu==1.15.0
-numpy==2.5.3
-pytest==9.1.1
-torch==2.14.0
-transformers==5.16.1
+# Lower bounds, so the library installs across supported Python versions.
+# For the exact environment the README's numbers were measured in, use
+# requirements-lock.txt instead.
+#
+# transformers must be 5.x: the reranker passes dtype= to from_pretrained,
+# which replaced torch_dtype= in that major version.
+torch>=2.4
+transformers>=5.0
+faiss-cpu>=1.8
+numpy>=2.0
+pytest>=8.0
