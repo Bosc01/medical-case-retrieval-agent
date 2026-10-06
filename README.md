@@ -37,7 +37,7 @@ system, because reranking cannot surface a case that FAISS never returned.
 
 ## Findings
 
-Six results, including the three that went against the change:
+Seven results, including the three that went against the change:
 
 1. Reranking improves the top five under a broad relevance definition. P@5 rises
    9.2%, from 0.5417 to 0.5917, and survives Benjamini-Hochberg correction
@@ -202,10 +202,9 @@ nDCG@5 is not significant at 0.05 by either test. The precision gains are real
 and the graded-gain version of the same measurement is not yet distinguishable
 from noise at this sample size. Both are reported.
 
-The p-values are uncorrected across 18 metrics. Testing that many at 0.05 finds
-something roughly a third of the time on noise alone. P@10 survives a Bonferroni
-correction. P@5 at 0.0044 does not quite clear the corrected 0.0028 threshold, so
-it should be read as suggestive rather than settled.
+The p-values in this table are uncorrected. Testing many metrics at 0.05 finds
+something on noise alone, so the correction is done properly under "After
+multiple-comparison correction" below, where P@5 survives Benjamini-Hochberg.
 
 The control arm earns its place. `ms-marco-MiniLM`, a general-domain reranker,
 moves P@5 by exactly 0.0000 and makes MRR worse. Reranking as a technique is not
@@ -470,9 +469,6 @@ occasionally scored highly by the cross-encoder and displace better cases,
 because its scores are not calibrated well enough across a deeper pool for the
 extra reach to be free.
 
-MAP does improve with depth on the broad definition, +0.0380 at p=0.0001, and
-that is the one real benefit. It is not the metric this pipeline consumes.
-
 MAP does improve with depth, +10.5% at depth 200 with p=0.0011, but MAP rewards
 finding more relevant documents anywhere in the ranking. This pipeline shows
 five. The metric that improves is not the metric the product uses.
@@ -545,7 +541,7 @@ baseline attached or not quoted at all.
 
 The looseness of the relevance definition cuts against this repository, not for
 it. `scripts/strict_eval.py` re-runs the comparison under a tighter definition,
-and the result is reported below under "The gain does not survive a stricter
+and the result is reported above under "The gain does not survive a stricter
 definition". It does not survive.
 
 
